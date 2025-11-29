@@ -2,8 +2,6 @@ package com.example.bluetooth_print_plus.bluetooth_print_plus;
 
 import static android.bluetooth.BluetoothDevice.DEVICE_TYPE_LE;
 
-import static androidx.core.app.ActivityCompat.startActivityForResult;
-
 import android.Manifest;
 import android.app.Activity;
 import android.app.Application;
@@ -18,7 +16,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 
-import androidx.annotation.RequiresApi;
+import androidx.annotation.NonNull;
 
 import com.example.bluetooth_print_plus.bluetooth_print_plus.payload.BPPState;
 import com.example.bluetooth_print_plus.bluetooth_print_plus.payload.BluetoothParameter;
@@ -28,37 +26,45 @@ import com.gprinter.bean.PrinterDevices;
 import com.gprinter.io.PortManager;
 import com.gprinter.utils.CallbackListener;
 import com.gprinter.utils.Command;
-import com.gprinter.utils.LogUtils;
 import com.gprinter.utils.ConnMethod;
-import io.flutter.embedding.engine.plugins.FlutterPlugin;
-import io.flutter.embedding.engine.plugins.activity.ActivityAware;
-import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding;
-import io.flutter.plugin.common.*;
-import io.flutter.plugin.common.EventChannel.EventSink;
-import io.flutter.plugin.common.EventChannel.StreamHandler;
-import io.flutter.plugin.common.MethodChannel.MethodCallHandler;
-import io.flutter.plugin.common.MethodChannel.Result;
-import io.flutter.plugin.common.PluginRegistry.RequestPermissionsResultListener;
-import pub.devrel.easypermissions.EasyPermissions;
+import com.gprinter.utils.LogUtils;
 
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 
+import io.flutter.embedding.engine.plugins.FlutterPlugin;
+import io.flutter.embedding.engine.plugins.activity.ActivityAware;
+import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding;
+import io.flutter.plugin.common.BinaryMessenger;
+import io.flutter.plugin.common.EventChannel;
+import io.flutter.plugin.common.EventChannel.EventSink;
+import io.flutter.plugin.common.EventChannel.StreamHandler;
+import io.flutter.plugin.common.MethodCall;
+import io.flutter.plugin.common.MethodChannel;
+import io.flutter.plugin.common.MethodChannel.MethodCallHandler;
+import io.flutter.plugin.common.MethodChannel.Result;
+import io.flutter.plugin.common.PluginRegistry.RequestPermissionsResultListener;
+import pub.devrel.easypermissions.EasyPermissions;
+
 /**
  * BluetoothPrintPlusPlugin
- *
- * @author amoLink
  */
 public class BluetoothPrintPlusPlugin
         implements FlutterPlugin, ActivityAware, MethodCallHandler, RequestPermissionsResultListener {
+
   private static final String TAG = "BluetoothPrintPlusPlugin";
-  private static final int REQUEST_LOCATION_PERMISSIONS = 1452;
+  private static final int REQUEST_BLUETOOTH_PERMISSIONS = 1452;
+
   private final Object initializationLock = new Object();
+
   private Context context;
   private Activity activity;
+
+  // Result for the current "startScan" method call (waiting on permission).
   private Result pendingResult;
+
   public PortManager portManager = null;
   private BluetoothAdapter mBluetoothAdapter;
 
@@ -90,10 +96,10 @@ public class BluetoothPrintPlusPlugin
   public void onAttachedToActivity(ActivityPluginBinding binding) {
     activityBinding = binding;
     setup(
-            pluginBinding.getBinaryMessenger(),
-            (Application) pluginBinding.getApplicationContext(),
-            activityBinding.getActivity(),
-            activityBinding
+        pluginBinding.getBinaryMessenger(),
+        (Application) pluginBinding.getApplicationContext(),
+        activityBinding.getActivity(),
+        activityBinding
     );
   }
 
@@ -113,10 +119,10 @@ public class BluetoothPrintPlusPlugin
   }
 
   private void setup(
-          final BinaryMessenger messenger,
-          final Application application,
-          final Activity activity,
-          final ActivityPluginBinding activityBinding
+      final BinaryMessenger messenger,
+      final Application application,
+      final Activity activity,
+      final ActivityPluginBinding activityBinding
   ) {
     synchronized (initializationLock) {
       LogUtils.i(TAG, "setup");
@@ -145,15 +151,31 @@ public class BluetoothPrintPlusPlugin
 
   private void tearDown() {
     LogUtils.i(TAG, "teardown");
-    context.unregisterReceiver(mFindBlueToothReceiver);
+    try {
+      if (context != null) {
+        context.unregisterReceiver(mFindBlueToothReceiver);
+      }
+    } catch (Exception ignored) {
+    }
     context = null;
-    activityBinding.removeRequestPermissionsResultListener(this);
-    activityBinding = null;
-    channel.setMethodCallHandler(null);
-    channel = null;
-    stateChannel.setStreamHandler(null);
-    stateChannel = null;
+
+    if (activityBinding != null) {
+      activityBinding.removeRequestPermissionsResultListener(this);
+      activityBinding = null;
+    }
+
+    if (channel != null) {
+      channel.setMethodCallHandler(null);
+      channel = null;
+    }
+
+    if (stateChannel != null) {
+      stateChannel.setStreamHandler(null);
+      stateChannel = null;
+    }
+
     mBluetoothAdapter = null;
+    pendingResult = null;
   }
 
   @Override
@@ -205,8 +227,8 @@ public class BluetoothPrintPlusPlugin
       filter.addAction(BluetoothDevice.ACTION_FOUND);
       filter.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED);
       context.registerReceiver(mFindBlueToothReceiver, filter);
-    } catch (Exception ignored) {
-
+    } catch (Exception e) {
+      LogUtils.e(TAG, "initBroadcast error: " + e.getMessage());
     }
   }
 
@@ -223,7 +245,9 @@ public class BluetoothPrintPlusPlugin
         parameter.setBluetoothName(device.getName());
         parameter.setBluetoothMac(device.getAddress());
         parameter.setBluetoothStrength(rssi + "");
-        LogUtils.i(TAG, "\nBlueToothName: " + device.getName() + "\nMacAddress: " + device.getAddress() + "\nrssi: " + rssi);
+        LogUtils.i(TAG, "\nBlueToothName: " + device.getName()
+            + "\nMacAddress: " + device.getAddress()
+            + "\nrssi: " + rssi);
         invokeMethodUIThread(device);
       }
     }
@@ -239,6 +263,7 @@ public class BluetoothPrintPlusPlugin
           result.success(BPPState.BlueOn.getValue());
           break;
         default:
+          // Do nothing
           break;
       }
     } catch (SecurityException e) {
@@ -249,25 +274,54 @@ public class BluetoothPrintPlusPlugin
   private void startScan(Result result) {
     LogUtils.i(TAG, "start scan...");
     try {
-      String[] perms = {
-          Manifest.permission.BLUETOOTH,
-          Manifest.permission.BLUETOOTH_ADMIN,
-          Manifest.permission.BLUETOOTH_CONNECT,
-          Manifest.permission.BLUETOOTH_SCAN,
-          Manifest.permission.ACCESS_FINE_LOCATION,
-      };
-      if (EasyPermissions.hasPermissions(this.context, perms)) {
-        // Already have permission, do the thing
-        startScan();
+      String[] perms;
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        // Android 12+ uses new Bluetooth permissions (no location needed with neverForLocation flag)
+        perms = new String[] {
+            Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.BLUETOOTH_SCAN,
+        };
       } else {
-        // Do not have permissions, request them now
-        EasyPermissions.requestPermissions(
-                this.activity,
-                "Bluetooth requires location permission!!!",
-                REQUEST_LOCATION_PERMISSIONS,
-                perms);
+        // Older Android requires location permission for BT scanning
+        perms = new String[] {
+            Manifest.permission.ACCESS_FINE_LOCATION,
+        };
       }
-      result.success(null);
+
+      boolean hasPerms = EasyPermissions.hasPermissions(this.context, perms);
+      LogUtils.i(TAG, "hasPermissions: " + hasPerms);
+
+      // If already granted, start scan immediately and return success.
+      if (hasPerms) {
+        LogUtils.i(TAG, "Permissions granted, calling startScanInternal");
+        startScanInternal();
+        result.success(null);
+        return;
+      }
+      
+      LogUtils.i(TAG, "Requesting permissions...");
+
+      // Need to ask for permissions; store this result for later completion.
+      // If another permission flow is already pending, fail it first.
+      if (pendingResult != null) {
+        pendingResult.error(
+            "PERMISSION_IN_PROGRESS",
+            "Another permission request is already in progress",
+            null
+        );
+        pendingResult = null;
+      }
+
+      pendingResult = result;
+
+      EasyPermissions.requestPermissions(
+          this.activity,
+          "Bluetooth requires Bluetooth permissions to scan for devices.",
+          REQUEST_BLUETOOTH_PERMISSIONS,
+          perms
+      );
+
+      // Do NOT call result.success here; wait for onRequestPermissionsResult.
     } catch (Exception e) {
       result.error("startScan", e.getMessage(), e);
     }
@@ -279,20 +333,30 @@ public class BluetoothPrintPlusPlugin
     ret.put("name", device.getName());
     ret.put("type", device.getType());
     new Handler(Looper.getMainLooper()).post(() -> {
-      if (!ret.isEmpty()) {
+      if (!ret.isEmpty() && channel != null) {
         channel.invokeMethod("ScanResult", ret);
       } else {
-        LogUtils.w(TAG, "invokeMethodUIThread: tried to call method on closed channel: " + "ScanResult");
+        LogUtils.w(TAG, "invokeMethodUIThread: tried to call method on closed channel: ScanResult");
       }
     });
   }
 
-  private void startScan() throws IllegalStateException {
-    mBluetoothAdapter.startDiscovery();
+  private void startScanInternal() throws IllegalStateException {
+    if (mBluetoothAdapter != null) {
+      boolean started = mBluetoothAdapter.startDiscovery();
+      LogUtils.i(TAG, "startDiscovery() returned: " + started);
+      if (!started) {
+        LogUtils.w(TAG, "startDiscovery failed - check if location is enabled and permissions granted");
+      }
+    } else {
+      throw new IllegalStateException("BluetoothAdapter is null");
+    }
   }
 
   private void stopScan() {
-    mBluetoothAdapter.cancelDiscovery();
+    if (mBluetoothAdapter != null) {
+      mBluetoothAdapter.cancelDiscovery();
+    }
   }
 
   public void connect(final String mac) {
@@ -309,42 +373,43 @@ public class BluetoothPrintPlusPlugin
         }
         if (mac != null) {
           PrinterDevices blueTooth = new PrinterDevices.Build()
-                  .setContext(context)
-                  .setConnMethod(ConnMethod.BLUETOOTH)
-                  .setMacAddress(mac)
-                  .setCommand(Command.ESC)
-                  .setCallbackListener(new CallbackListener() {
-                    @Override
-                    public void onConnecting() { }
+              .setContext(context)
+              .setConnMethod(ConnMethod.BLUETOOTH)
+              .setMacAddress(mac)
+              .setCommand(Command.ESC)
+              .setCallbackListener(new CallbackListener() {
+                @Override
+                public void onConnecting() { }
 
-                    @Override
-                    public void onCheckCommand() { }
+                @Override
+                public void onCheckCommand() { }
 
-                    @Override
-                    public void onSuccess(PrinterDevices printerDevices) {
-                      // LogUtils.d(TAG, "onSuccess");
-                      sink.success(BPPState.DeviceConnected.getValue());
-                    }
+                @Override
+                public void onSuccess(PrinterDevices printerDevices) {
+                  if (sink != null) {
+                    sink.success(BPPState.DeviceConnected.getValue());
+                  }
+                }
 
-                    @Override
-                    public void onReceive(byte[] data) {
-                      if (data == null) return;
-                      // LogUtils.d(TAG, "Received Data: " + Arrays.toString(data));
-                      new Handler(Looper.getMainLooper()).post(() -> {
-                        channel.invokeMethod("ReceivedData", data);
-                      });
-                    }
+                @Override
+                public void onReceive(byte[] data) {
+                  if (data == null || channel == null) return;
+                  new Handler(Looper.getMainLooper()).post(() -> {
+                    channel.invokeMethod("ReceivedData", data);
+                  });
+                }
 
-                    @Override
-                    public void onFailure() { }
+                @Override
+                public void onFailure() { }
 
-                    @Override
-                    public void onDisconnect() {
-                      // LogUtils.d(TAG, "onDisconnect");
-                      sink.success(BPPState.DeviceDisconnected.getValue());
-                    }
-                  })
-                  .build();
+                @Override
+                public void onDisconnect() {
+                  if (sink != null) {
+                    sink.success(BPPState.DeviceDisconnected.getValue());
+                  }
+                }
+              })
+              .build();
           Printer.connect(blueTooth);
         }
       }
@@ -354,34 +419,74 @@ public class BluetoothPrintPlusPlugin
   @SuppressWarnings("unchecked")
   private boolean write(byte[] data) throws IOException {
     boolean result = Printer.getPortManager().writeDataImmediately(data);
-    LogUtils.d(TAG, result ? "发送成功": "发送失败");
+    LogUtils.d(TAG, result ? "发送成功" : "发送失败");
     return result;
   }
 
   @Override
-  public boolean onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
-    LogUtils.d(TAG, "onRequestPermissionsResult");
-    if (requestCode == REQUEST_LOCATION_PERMISSIONS) {
-      if (grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-        startScan();
-      } else {
-        pendingResult.error("no_permissions", "this plugin requires location permissions for scanning", null);
-        pendingResult = null;
-      }
-      return true;
-    }
+public boolean onRequestPermissionsResult(
+    int requestCode,
+    @NonNull String[] permissions,
+    @NonNull int[] grantResults
+) {
+  LogUtils.d(TAG, "onRequestPermissionsResult");
+
+  if (requestCode != REQUEST_BLUETOOTH_PERMISSIONS) {
     return false;
   }
 
+  if (pendingResult == null) {
+    LogUtils.w(TAG, "onRequestPermissionsResult: no pendingResult");
+    return true;
+  }
+
+  if (grantResults.length == 0) {
+    pendingResult.error(
+        "no_permissions",
+        "Permission dialog was cancelled or returned no results",
+        null
+    );
+    pendingResult = null;
+    return true;
+  }
+
+  boolean allGranted = true;
+  for (int r : grantResults) {
+    if (r != PackageManager.PERMISSION_GRANTED) {
+      allGranted = false;
+      break;
+    }
+  }
+
+  if (allGranted) {
+    try {
+      startScanInternal();
+      pendingResult.success(null);
+    } catch (Exception e) {
+      pendingResult.error("startScan", e.getMessage(), e);
+    } finally {
+      pendingResult = null;
+    }
+  } else {
+    pendingResult.error(
+        "no_permissions",
+        "this plugin requires Bluetooth permissions to scan for devices",
+        null
+    );
+    pendingResult = null;
+  }
+
+  return true;
+}
+
   private final StreamHandler stateHandler = new StreamHandler() {
-    // private EventSink sink;
     private final BroadcastReceiver mReceiver = new BroadcastReceiver() {
       @Override
       public void onReceive(Context context, Intent intent) {
         final String action = intent.getAction();
-        // LogUtils.d(TAG, "stateStreamHandler, current action: " + action);
         if (BluetoothAdapter.ACTION_STATE_CHANGED.equals(action)) {
           int blueState = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, 0);
+          if (sink == null) return;
           switch (blueState) {
             case BluetoothAdapter.STATE_ON:
               sink.success(BPPState.BlueOn.getValue());
